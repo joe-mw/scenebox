@@ -81,28 +81,38 @@ nonisolated public enum TraktError: Error, LocalizedError {
 
 public actor TraktClient {
     private let clientID: String
-    private let base = "https://api.trakt.tv"
+    private let clientSecret: String?
+    private let base = TraktConfig.base
 
     public init?() {
         guard TraktConfig.isConfigured else { return nil }
         clientID = TraktConfig.clientID
+        clientSecret = TraktConfig.clientSecret
     }
 
     // MARK: Web auth
 
-    nonisolated public func authorizeURL(state: String) -> URL? {
-        var comps = URLComponents(string: "https://trakt.tv/oauth/authorize")
+    nonisolated public func authorizeURL(state: String, codeChallenge: String) -> URL? {
+        var comps = URLComponents(string: TraktConfig.authorizeEndpoint)
         comps?.queryItems = [
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: TraktConfig.redirectURI),
             URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
         ]
         return comps?.url
     }
 
-    public func exchangeCode(_ code: String) async throws -> TraktTokens {
-        try parseTokens(try await postAuth("/exchange", body: ["code": code]))
+    public func exchangeCode(_ code: String, verifier: String) async throws -> TraktTokens {
+        try parseTokens(try await postToken([
+            "client_id": clientID,
+            "code": code,
+            "code_verifier": verifier,
+            "redirect_uri": TraktConfig.redirectURI,
+            "grant_type": "authorization_code",
+        ]))
     }
 
     // MARK: Device auth
@@ -120,9 +130,16 @@ public actor TraktClient {
             expiresIn: obj["expires_in"] as? Int ?? 600)
     }
 
+    /// The device flow posts the device code straight to Trakt. It never needed
+    /// the secret either: polling with a bogus secret and with none at all both
+    /// answer the same "pending", so the dead backend was the only thing
+    /// standing between tvOS and a working sign-in.
     public func pollDeviceToken(deviceCode: String) async throws -> TraktTokens? {
         do {
-            return try parseTokens(try await postAuth("/device/token", body: ["code": deviceCode]))
+            return try parseTokens(try await post("/oauth/device/token", body: [
+                "client_id": clientID,
+                "device_code": deviceCode,
+            ]))
         } catch TraktError.http(let status) {
             switch status {
             case 400, 404, 409, 429: return nil   // pending, invalid, or slow down
@@ -134,11 +151,16 @@ public actor TraktClient {
     }
 
     public func refreshTokens(refreshToken: String) async throws -> TraktTokens {
-        try parseTokens(try await postAuth("/refresh", body: ["refresh_token": refreshToken]))
+        try parseTokens(try await postToken([
+            "client_id": clientID,
+            "refresh_token": refreshToken,
+            "redirect_uri": TraktConfig.redirectURI,
+            "grant_type": "refresh_token",
+        ]))
     }
 
     public func revoke(accessToken: String) async {
-        _ = try? await postAuth("/revoke", body: ["token": accessToken])
+        _ = try? await post("/oauth/revoke", body: authBody(["token": accessToken]))
     }
 
     private func parseTokens(_ obj: [String: Any]) throws -> TraktTokens {
@@ -295,11 +317,22 @@ public actor TraktClient {
         return response.object ?? [:]
     }
 
-    private func postAuth(_ path: String, body: [String: Any]) async throws -> [String: Any] {
-        guard let url = URL(string: "\(TraktConfig.authEndpoint)\(path)") else {
-            throw TraktError.badURL
-        }
-        let response = try await HTTP.post(url, json: body)
+    /// Adds the optional user-supplied secret. The app's own Trakt application
+    /// relies on PKCE alone and sends none; the secret exists only for a
+    /// user-supplied application that predates PKCE support.
+    private func authBody(_ body: [String: Any]) -> [String: Any] {
+        guard let clientSecret else { return body }
+        var body = body
+        body["client_secret"] = clientSecret
+        return body
+    }
+
+    /// OAuth token exchanges go straight to Trakt. They used to be proxied
+    /// through a Firebase function that held the client secret; that function
+    /// now answers 503, which is what broke sign-in.
+    private func postToken(_ body: [String: Any]) async throws -> [String: Any] {
+        guard let url = URL(string: TraktConfig.tokenEndpoint) else { throw TraktError.badURL }
+        let response = try await HTTP.post(url, json: authBody(body), headers: headers())
         try Self.check(response)
         return response.object ?? [:]
     }

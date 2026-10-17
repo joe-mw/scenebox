@@ -220,6 +220,17 @@ struct ProfileView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        TraktAppCredentialsView()
+                    } label: {
+                        LabeledContent("Trakt app",
+                                       value: TraktConfig.usesCustomApp ? "Custom" : "Bundled")
+                    }
+                } footer: {
+                    Text("Sign-in uses PKCE, so no client secret is needed. Point this at your own Trakt application if you prefer not to use the bundled one.")
+                }
+
+                Section {
                     Picker("Default audio", selection: $settings.preferredAudioLanguage) {
                         ForEach(AppSettings.audioLanguageOptions, id: \.code) { option in
                             Text(option.name).tag(option.code)
