@@ -160,17 +160,32 @@ final class TraktStore {
             return settings.traktAccessToken
         }
         guard let client else { return settings.traktAccessToken }
+
         do {
-            let tokens = try await client.refreshTokens(refreshToken: settings.traktRefreshToken)
-            settings.traktAccessToken = tokens.accessToken
-            settings.traktRefreshToken = tokens.refreshToken
-            settings.traktTokenExpiry = tokens.expiresAt
-            return tokens.accessToken
+            return try await refreshSession(using: client)
         } catch {
+            // Trakt refresh tokens are single-use. If another device refreshed
+            // first, ours is already dead and this failure is expected: adopt
+            // whatever that device wrote and try once more, instead of signing
+            // the user out for a race they didn't cause.
+            let stale = settings.traktRefreshToken
+            await CloudSettingsSync.shared.pullTraktSession()
+            if settings.traktRefreshToken != stale, !settings.traktRefreshToken.isEmpty,
+               let token = try? await refreshSession(using: client) {
+                return token
+            }
             if now < settings.traktTokenExpiry { return settings.traktAccessToken }
             settings.clearTraktSession()
             return nil
         }
+    }
+
+    private func refreshSession(using client: TraktClient) async throws -> String {
+        let tokens = try await client.refreshTokens(refreshToken: settings.traktRefreshToken)
+        settings.traktAccessToken = tokens.accessToken
+        settings.traktRefreshToken = tokens.refreshToken
+        settings.traktTokenExpiry = tokens.expiresAt
+        return tokens.accessToken
     }
 
     // MARK: - Lists
