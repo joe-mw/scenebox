@@ -18,6 +18,7 @@ struct ProfileView: View {
     @State private var confirmSignOut = false
     @State private var showLogin = false
     @State private var trakt = TraktStore.shared
+    @State private var config = FirebaseConfigStore.shared
     #if os(tvOS)
     @State private var showTraktConnect = false
     #endif
@@ -311,6 +312,24 @@ struct ProfileView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        FirebaseSetupView()
+                    } label: {
+                        LabeledContent("Firebase project", value: firebaseStatus)
+                    }
+                } header: {
+                    Text("Account")
+                } footer: {
+                    if config.needsRelaunch {
+                        Text("Quit and reopen SceneBox to switch to the new Firebase project.")
+                    } else if config.isConfigured {
+                        Text("Accounts, profiles and sync run on your own Firebase project.")
+                    } else {
+                        Text("Connect your Firebase project first. Guest mode keeps everything on this device.")
+                    }
+                }
+
+                Section {
                     contactRow("Support", email: "spontaneousarray@gmail.com")
                     NavigationLink("Credits") { CreditsView() }
                 } header: {
@@ -483,6 +502,15 @@ struct ProfileView: View {
         if hidden.isEmpty { return "None" }
         if hidden.count <= 2 { return hidden.map(\.title).joined(separator: ", ") }
         return "\(hidden.count) hidden"
+    }
+
+    private var firebaseStatus: String {
+        if config.needsRelaunch { return "Relaunch to apply" }
+        switch config.source {
+        case .imported: return "Imported"
+        case .bundled: return "Bundled"
+        case .none: return "Not set up"
+        }
     }
 
     private var appVersion: String {
