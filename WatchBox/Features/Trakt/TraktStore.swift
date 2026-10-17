@@ -56,10 +56,15 @@ final class TraktStore {
             }
             do {
                 let state = UUID().uuidString
-                guard let url = client.authorizeURL(state: state) else { throw TraktError.badURL }
+                let verifier = TraktPKCE.makeVerifier()
+                guard let url = client.authorizeURL(
+                    state: state,
+                    codeChallenge: TraktPKCE.challenge(for: verifier)
+                ) else { throw TraktError.badURL }
+
                 let callback = try await TraktWebAuth.shared.authorize(url: url)
                 let code = try Self.authorizationCode(from: callback, expectedState: state)
-                let tokens = try await client.exchangeCode(code)
+                let tokens = try await client.exchangeCode(code, verifier: verifier)
                 settings.traktAccessToken = tokens.accessToken
                 settings.traktRefreshToken = tokens.refreshToken
                 settings.traktTokenExpiry = tokens.expiresAt
